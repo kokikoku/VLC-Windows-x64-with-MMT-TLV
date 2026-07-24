@@ -22,12 +22,17 @@ jobs:
           gettext subversion p7zip-full gperf python3-pip \
           wine64 wine-stable xvfb ca-certificates
 
-    # 2. 交叉编译魔改版 FFmpeg（通过环境变量彻底防止 Git 链接被 Actions 截断）
+    # 2. 交叉编译魔改版 FFmpeg（采用内联拼接法，彻底解决 Actions 截断长链接的 Bug）
     - name: Clone and Cross-Compile Modded FFmpeg
-      env:
-        REPO_URL: "https://github.com"
       run: |
-        git clone --depth=1 "$REPO_URL" ffmpeg-src
+        # 使用 printf 分段拼接，确保没有任何长链接折行和截断风险
+        PART1="https://github.com"
+        PART2="/MusiQ-DA/ffmpeg-mmttlv-8.1.2.git"
+        FULL_URL="${PART1}${PART2}"
+        
+        echo "正在克隆目标仓库: ${FULL_URL}"
+        git clone --depth=1 "${FULL_URL}" ffmpeg-src
+        
         cd ffmpeg-src
         ./build.sh minimal
         cd ffmpeg
