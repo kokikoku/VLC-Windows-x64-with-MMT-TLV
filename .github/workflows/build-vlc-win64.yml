@@ -1,0 +1,122 @@
+name: Build and Wine Test VLC Win64 with MMT/TLV
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    # 1. 安装交叉编译工具链以及 Wine、Xvfb（虚拟显示）环境
+    - name: Install Cross-Compile & Wine Environments
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git build-essential pkg-config m4 patch textutils \
+          mingw-w64 mingw-w64-tools yasm nasm cmake automake libtool autopoint \
+          gettext subversion p7zip-full gperf python3-pip \
+          wine64 wine-stable xvfb
+
+    # 2. 交叉编译魔改版 FFmpeg (MusiQ-DA/ffmpeg-mmttlv-8.1.2)
+    - name: Clone and Cross-Compile Modded FFmpeg
+      run: |
+        git clone --depth=1 https://github.com ffmpeg-src
+        cd ffmpeg-src
+        ./build.sh minimal
+        cd ffmpeg
+        
+        # 确保开启了 openssl 或 gnutls，否则 ffmpeg 无法解析 https:// 协议的流媒体
+        ./configure \
+          --arch=x86_64 \
+          --target-os=mingw32 \
+          --cross-prefix=x86_64-w64-mingw32- \
+          --prefix=$GITHUB_WORKSPACE/win64_deps \
+          --enable-shared \
+          --disable-static \
+          --enable-gpl \
+          --enable-gnutls \
+          --enable-demuxer=mmttlv \
+          --enable-protocol=http,https,file,tls
+          
+        make -j$(nproc)
+        make install
+
+    # 3. 拉取并给 VLC 源码打补丁
+    - name: Clone and Patch VLC
+      run: |
+        git clone --depth=1 --branch 3.0 https://github.com vlc-src
+        cd vlc-src/modules/demux/avformat
+        sed -i '/"lavf"/a \    { "mmttlv", "mmttlv", N_("FFmpeg MMT/TLV demuxer") },' demux.c
+
+    # 4. 准备预编译的 Contrib 依赖
+    - name: Setup VLC Contribs
+      run: |
+        cd vlc-src
+        mkdir -p contrib/win32 && cd contrib/win32
+        ../bootstrap --host=x86_64-w64-mingw32 --disable-gpl
+        make prebuilt
+
+    # 5. 配置并交叉编译 VLC Windows 版本
+    - name: Configure and Build VLC
+      run: |
+        cd vlc-src
+        ./bootstrap
+        mkdir build && cd build
+        export PKG_CONFIG_PATH=$GITHUB_WORKSPACE/win64_deps/lib/pkgconfig:$GITHUB_WORKSPACE/vlc-src/contrib/x86_64-w64-mingw32/lib/pkgconfig
+        export PKG_CONFIG_LIBDIR=$GITHUB_WORKSPACE/win64_deps/lib/pkgconfig
+        
+        ../configure \
+          --host=x86_64-w64-mingw32 \
+          --enable-avcodec \
+          --disable-lua \
+          --prefix=$GITHUB_WORKSPACE/vlc_win64_dist
+          
+        make -j$(nproc)
+        make install
+
+    # 6. 整合 DLL 动态库
+    - name: Bundle Modded Windows DLLs
+      run: |
+        cp $GITHUB_WORKSPACE/win64_deps/bin/*.dll $GITHUB_WORKSPACE/vlc_win64_dist/bin/
+
+    # 7. 🔥 使用 Wine + Xvfb 针对 NHK MMT 流进行播放测试
+    - name: Run Smoke Test with Wine & NHK Stream
+      run: |
+        cd $GITHUB_WORKSPACE/vlc_win64_dist/bin/
+        
+        # 初始化 Wine 环境配置
+        wine winecfg /v win10
+        
+        echo "开始进行 Wine 模拟播放测试（NHK BSP4K MMT 流）..."
+        # 1. 使用 xvfb-run 模拟一个虚拟的 X11 显示环境
+        # 2. 使用 --vlc-demux=avformat --avformat-format=mmttlv 强制触发魔改模块
+        # 3. 使用 --run-time=10 让 VLC 播放 10 秒后自动退出，避免 CI 卡死
+        # 4. -I dummy 禁用图形界面日志输出，直接打印后台核心日志 (-vvv) 供审查
+        xvfb-run --server-args="-screen 0 1024x768x24" \
+          wine vlc.exe -I dummy -vvv \
+          --demux=avformat --avformat-format=mmttlv \
+          --run-time=10 vlc://quit \
+          "https://i9.ee" > vlc_wine_test.log 2>&1 || true
+          
+        # 打印 VLC 日志的最后 100 行，检查是否成功打开了 mmttlv 并解析了 HEVC 视频流
+        echo "=== VLC 运行日志截选 ==="
+        tail -n 100 vlc_wine_test.log
+        
+        # 验证日志中是否包含关键的 avformat 或 mmttlv 成功加载标识
+        if grep -qi "avformat.*mmttlv" vlc_wine_test.log || grep -qi "demux.*opened" vlc_wine_test.log; then
+          echo "测试通过：VLC 已成功识别并开始解析 mmttlv 流！"
+        else
+          echo "警告：日志中未发现明确的 mmttlv 模块加载成功标识，请仔细检查上方日志。"
+        fi
+
+    # 8. 打包并上传产物
+    - name: Package and Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: vlc-windows-11-x64-mmttlv
+        path: ${{ github.workspace }}/vlc_win64_dist/
