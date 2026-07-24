@@ -22,10 +22,12 @@ jobs:
           gettext subversion p7zip-full gperf python3-pip \
           wine64 wine-stable xvfb ca-certificates
 
-    # 2. 交叉编译魔改版 FFmpeg（修正了链接换行被截断的问题）
+    # 2. 交叉编译魔改版 FFmpeg（通过环境变量彻底防止 Git 链接被 Actions 截断）
     - name: Clone and Cross-Compile Modded FFmpeg
+      env:
+        REPO_URL: "https://github.com"
       run: |
-        git clone --depth=1 "https://github.com" ffmpeg-src
+        git clone --depth=1 "$REPO_URL" ffmpeg-src
         cd ffmpeg-src
         ./build.sh minimal
         cd ffmpeg
