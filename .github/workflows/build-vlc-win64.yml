@@ -13,14 +13,14 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
 
-    # 1. 安装交叉编译工具链以及 Wine、Xvfb（虚拟显示）环境
+    # 1. 安装交叉编译工具链以及 Wine、Xvfb、系统证书环境（去除了已废弃的 textutils 增加 ca-certificates）
     - name: Install Cross-Compile & Wine Environments
       run: |
         sudo apt-get update
-        sudo apt-get install -y git build-essential pkg-config m4 patch textutils \
+        sudo apt-get install -y git build-essential pkg-config m4 patch coreutils \
           mingw-w64 mingw-w64-tools yasm nasm cmake automake libtool autopoint \
           gettext subversion p7zip-full gperf python3-pip \
-          wine64 wine-stable xvfb
+          wine64 wine-stable xvfb ca-certificates
 
     # 2. 交叉编译魔改版 FFmpeg (MusiQ-DA/ffmpeg-mmttlv-8.1.2)
     - name: Clone and Cross-Compile Modded FFmpeg
@@ -30,7 +30,7 @@ jobs:
         ./build.sh minimal
         cd ffmpeg
         
-        # 确保开启了 openssl 或 gnutls，否则 ffmpeg 无法解析 https:// 协议的流媒体
+        # 确保开启了 gnutls，否则 ffmpeg 无法解析 https:// 协议的流媒体
         ./configure \
           --arch=x86_64 \
           --target-os=mingw32 \
@@ -84,7 +84,7 @@ jobs:
       run: |
         cp $GITHUB_WORKSPACE/win64_deps/bin/*.dll $GITHUB_WORKSPACE/vlc_win64_dist/bin/
 
-    # 7. 🔥 使用 Wine + Xvfb 针对 NHK MMT 流进行播放测试
+    # 7. 使用 Wine + Xvfb 针对 NHK MMT 流进行播放测试
     - name: Run Smoke Test with Wine & NHK Stream
       run: |
         cd $GITHUB_WORKSPACE/vlc_win64_dist/bin/
