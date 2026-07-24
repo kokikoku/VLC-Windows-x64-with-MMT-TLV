@@ -22,7 +22,7 @@ jobs:
           gettext subversion p7zip-full gperf python3-pip \
           wine64 wine-stable xvfb ca-certificates
 
-    # 2. 交叉编译魔改版 FFmpeg（利用项目自带编译流，注入跨平台 Mingw 编译器）
+    # 2. 交叉编译魔改版 FFmpeg（干预原作者 build.sh 进程，只打补丁不编译，强行注入 Win64 交叉工具链）
     - name: Clone and Cross-Compile Modded FFmpeg
       run: |
         PART1="https://github.com"
@@ -32,14 +32,18 @@ jobs:
         git clone --depth=1 "${FULL_URL}" ffmpeg-src
         cd ffmpeg-src
         
-        # 核心修正：利用原作者自带的 minimal 脚本拉取和打补丁
-        ./build.sh minimal
+        # 【关键魔改】修改 build.sh，使其在给 ffmpeg 源码打完 MMT 补丁后立即退出(exit 0)，阻止其自动开始 Linux 编译
+        # 顺便寻找它拉取的真实版本号
+        sed -i '/cd ffmpeg/i exit 0' build.sh
+        sed -i '/cd "$FFMPEG_SRC"/i exit 0' build.sh
         
-        # 寻找被拉取出来的真实 ffmpeg 源码目录名称（原作者通常解压在当前或子目录下）
-        FFMPEG_DIR=$(find . -maxdepth 2 -type d -name "ffmpeg*" | head -n 1)
-        if [ -z "$FFMPEG_DIR" ]; then FFMPEG_DIR="ffmpeg"; fi
+        # 执行脚本，此时它只会下载原版 FFmpeg 并自动把 mmttlv 的解复用器代码、TLV 解析代码打好补丁
+        ./build.sh minimal || true
         
-        cd "$FFMPEG_DIR" || cd build/*
+        # 寻找打好补丁后的真实源码工作文件夹（该项目会把源码释放至 src/ 文件夹或根目录）
+        REAL_SRC_DIR=$(find . -type d -name "ffmpeg" -o -name "ffmpeg-*" | grep -v "build" | head -n 1)
+        echo "探测到已打补丁的真实 FFmpeg 源码路径为: ${REAL_SRC_DIR}"
+        cd "${REAL_SRC_DIR}"
         
         # 强制配置为 Windows x64 交叉编译动态库模式
         ./configure \
