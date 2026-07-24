@@ -22,20 +22,26 @@ jobs:
           gettext subversion p7zip-full gperf python3-pip \
           wine64 wine-stable xvfb ca-certificates
 
-    # 2. 交叉编译魔改版 FFmpeg（采用内联拼接法，彻底解决 Actions 截断长链接的 Bug）
+    # 2. 交叉编译魔改版 FFmpeg（利用项目自带编译流，注入跨平台 Mingw 编译器）
     - name: Clone and Cross-Compile Modded FFmpeg
       run: |
-        # 使用 printf 分段拼接，确保没有任何长链接折行和截断风险
         PART1="https://github.com"
         PART2="/MusiQ-DA/ffmpeg-mmttlv-8.1.2.git"
         FULL_URL="${PART1}${PART2}"
         
-        echo "正在克隆目标仓库: ${FULL_URL}"
         git clone --depth=1 "${FULL_URL}" ffmpeg-src
-        
         cd ffmpeg-src
+        
+        # 核心修正：利用原作者自带的 minimal 脚本拉取和打补丁
         ./build.sh minimal
-        cd ffmpeg
+        
+        # 寻找被拉取出来的真实 ffmpeg 源码目录名称（原作者通常解压在当前或子目录下）
+        FFMPEG_DIR=$(find . -maxdepth 2 -type d -name "ffmpeg*" | head -n 1)
+        if [ -z "$FFMPEG_DIR" ]; then FFMPEG_DIR="ffmpeg"; fi
+        
+        cd "$FFMPEG_DIR" || cd build/*
+        
+        # 强制配置为 Windows x64 交叉编译动态库模式
         ./configure \
           --arch=x86_64 \
           --target-os=mingw32 \
@@ -47,6 +53,7 @@ jobs:
           --enable-gnutls \
           --enable-demuxer=mmttlv \
           --enable-protocol=http,https,file,tls
+        
         make -j$(nproc)
         make install
 
